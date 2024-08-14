@@ -1,8 +1,20 @@
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 
 import { useChat } from "@/components/ChatProvider";
 import type { MessageType } from "@/lib/mock";
 import { colors } from "@/lib/theme";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  FadeInDown,
+  FadeInRight,
+  FadeOutDown,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  ZoomIn,
+  ZoomOut,
+} from "react-native-reanimated";
 
 interface Props {
   message: MessageType;
@@ -13,36 +25,71 @@ const emojis = ["👍", "👎", "😂", "😢", "😡", "😲"];
 export function EmojiStaggerLesson({ message }: Props) {
   const { currentPopupId, setCurrentPopupId } = useChat();
 
+  const pressed = useSharedValue(false);
+
+  const longPressGesture = Gesture.LongPress()
+    .onBegin(() => {
+      pressed.value = true;
+    })
+    .onStart(() => {
+      runOnJS(setCurrentPopupId)(message.id);
+    })
+    .onFinalize(() => {
+      pressed.value = false;
+    });
+
+  const wrapperStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: withTiming(pressed.value ? 0.96 : 1) }],
+    };
+  });
+
   return (
     <View>
-      <Pressable
-        style={[
-          styles.message,
-          message.from === "me" ? styles.messageMe : styles.messageThem,
-        ]}
-        onPress={() => setCurrentPopupId(message.id)}>
-        <Text
+      <GestureDetector gesture={longPressGesture}>
+        <Animated.View
           style={[
-            styles.messageText,
-            message.from === "me"
-              ? styles.messageTextMe
-              : styles.messageTextThem,
-          ]}>
-          {message.message}
-        </Text>
-      </Pressable>
+            styles.message,
+            message.from === "me" ? styles.messageMe : styles.messageThem,
+            wrapperStyle,
+          ]}
+        >
+          <Text
+            style={[
+              styles.messageText,
+              message.from === "me"
+                ? styles.messageTextMe
+                : styles.messageTextThem,
+            ]}
+          >
+            {message.message}
+          </Text>
+        </Animated.View>
+      </GestureDetector>
 
       {currentPopupId === message.id && (
         <View style={styles.emojiPopupContainer}>
-          <View style={[styles.emojiPopupWrapper, styles.shadow]}>
-            <View style={styles.emojiPopup}>
-              {emojis.map((emoji) => (
-                <Text style={styles.emoji} key={emoji}>
+          <Animated.View
+            style={[styles.emojiPopupWrapper, styles.shadow]}
+            entering={FadeInDown.duration(200)}
+            exiting={FadeOutDown.delay(emojis.length * 33)}
+          >
+            <Animated.View style={styles.emojiPopup} entering={FadeInRight}>
+              {emojis.map((emoji, i) => (
+                <Animated.Text
+                  style={styles.emoji}
+                  key={emoji}
+                  entering={ZoomIn.springify()
+                    .delay(33 * i + 100)
+                    .stiffness(200)
+                    .damping(10)}
+                  exiting={ZoomOut.springify().delay((emojis.length - i) * 33)}
+                >
                   {emoji}
-                </Text>
+                </Animated.Text>
               ))}
-            </View>
-          </View>
+            </Animated.View>
+          </Animated.View>
         </View>
       )}
     </View>
