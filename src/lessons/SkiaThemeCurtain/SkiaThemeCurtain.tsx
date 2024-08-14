@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Appearance,
   Dimensions,
@@ -14,8 +14,24 @@ import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { Trending } from "@/components/Trending";
 
-import { Transition, glsl } from "@/lib/shader";
+import { Transition, glsl, transition } from "@/lib/shader";
+import {
+  Canvas,
+  Fill,
+  Image,
+  ImageShader,
+  Shader,
+  SkImage,
+  makeImageFromView,
+} from "@shopify/react-native-skia";
 import { StatusBar } from "expo-status-bar";
+import {
+  runOnJS,
+  useAnimatedRef,
+  useDerivedValue,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 
 const TRANSITION_DURATION = 800;
 
@@ -58,14 +74,35 @@ vec4 transition (vec2 uv) {
 `;
 
 export function SkiaThemeCurtain() {
+  const progress = useSharedValue(0);
   const colorScheme = useColorScheme();
-  const changeTheme = () => {
+  const [firstSnapshot, setFirstSnapshot] = useState<SkImage | null>(null);
+  const [secondSnapshot, setSecondSnapshot] = useState<SkImage | null>(null);
+
+  const { width, height } = Dimensions.get("window");
+
+  const changeTheme = async () => {
+    progress.value = 0;
+    const snapshot = await makeImageFromView(ref);
+    setFirstSnapshot(snapshot);
     Appearance.setColorScheme(colorScheme === "light" ? "dark" : "light");
   };
+  const ref = useAnimatedRef<ScrollView>();
 
   useEffect(() => {
     const listener = Appearance.addChangeListener(() => {
-      console.log("theme changed!");
+      setTimeout(async () => {
+        const snapshot = await makeImageFromView(ref);
+        setSecondSnapshot(snapshot);
+        progress.value = withTiming(
+          1,
+          { duration: TRANSITION_DURATION },
+          () => {
+            runOnJS(setFirstSnapshot)(null);
+            runOnJS(setSecondSnapshot)(null);
+          }
+        );
+      }, 30);
     });
 
     return () => {
@@ -73,9 +110,57 @@ export function SkiaThemeCurtain() {
     };
   }, []);
 
+  const uniforms = useDerivedValue(() => {
+    return {
+      progress: progress.value,
+      resolution: [width, height], // from Dimensions.get("window")
+    };
+  });
+
+  const isTransitioning = firstSnapshot !== null && secondSnapshot !== null;
+  if (isTransitioning) {
+    return (
+      <View style={styles.fill}>
+        <Canvas style={{ height: height }}>
+          <Fill>
+            <Shader
+              uniforms={uniforms}
+              source={transition(colorScheme === "light" ? warpUp : warpDown)}
+            >
+              <ImageShader
+                image={firstSnapshot}
+                fit="cover"
+                width={width}
+                height={height}
+              />
+              <ImageShader
+                image={secondSnapshot}
+                fit="cover"
+                width={width}
+                height={height}
+              />
+            </Shader>
+          </Fill>
+        </Canvas>
+        <StatusBar translucent />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.fill}>
+      {firstSnapshot && (
+        <Canvas style={styles.overlay}>
+          <Image
+            image={firstSnapshot}
+            fit="cover"
+            width={width}
+            height={height}
+          />
+        </Canvas>
+      )}
       <ScrollView
+        ref={ref}
         style={[
           styles.container,
           { height: height },
