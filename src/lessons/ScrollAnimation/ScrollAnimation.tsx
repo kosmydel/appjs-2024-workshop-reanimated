@@ -1,59 +1,117 @@
 import { ContactsListHeader } from "@/components/ContactsListHeader";
 import { ContactsListItem } from "@/components/ContactsListItem";
 import { Container } from "@/components/Container";
-import { alphabet, contacts } from "@/lib/mock";
+import { alphabet, contacts, ContactSection } from "@/lib/mock";
 import { hitSlop } from "@/lib/reanimated";
 import { colorShades, layout } from "@/lib/theme";
-import { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 import { SectionList, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  clamp,
   Extrapolation,
   interpolate,
+  measure,
+  runOnJS,
+  runOnUI,
+  SharedValue,
+  useAnimatedRef,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
   withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import sectionListGetItemLayout from "react-native-section-list-get-item-layout";
 
 type AlphabetLetterProps = {
   index: number;
   letter: string;
+  scrollableIndex: SharedValue<number>;
+  scrollToLocation: (index: number) => void;
 };
 
-const AlphabetLetter = ({ index, letter }: AlphabetLetterProps) => {
+const AlphabetLetter = ({
+  index,
+  letter,
+  scrollableIndex,
+  scrollToLocation,
+}: AlphabetLetterProps) => {
+  const zstyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        scale: interpolate(
+          scrollableIndex.value,
+          [index - 2, index, index + 2],
+          [1, 1.5, 1],
+          Extrapolation.CLAMP
+        ),
+      },
+      {
+        translateX: interpolate(
+          scrollableIndex.value,
+          [index - 1, index, index + 1],
+          [0, -layout.knobSize / 8, 0],
+          Extrapolation.CLAMP
+        ),
+      },
+    ],
+    opacity: interpolate(
+      scrollableIndex.value,
+      [index - 1, index, index + 1],
+      [0.5, 1, 0.5],
+      Extrapolation.CLAMP
+    ),
+  }));
+
+  const tapGesture = Gesture.Tap().onEnd(() => {
+    runOnJS(scrollToLocation)(index);
+  });
+
   return (
-    <Animated.View
-      style={[
-        {
-          position: "relative",
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "row",
-        },
-      ]}>
-      <Animated.Text
+    <GestureDetector gesture={tapGesture}>
+      <Animated.View
         style={[
           {
-            position: "absolute",
-            fontFamily: "Menlo",
-            left: -20,
-            fontWeight: "900",
+            position: "relative",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
           },
-        ]}>
-        {letter.toUpperCase()}
-      </Animated.Text>
-    </Animated.View>
+        ]}
+      >
+        <Animated.Text
+          style={[
+            {
+              position: "absolute",
+              fontFamily: "Menlo",
+              left: -20,
+              fontWeight: "900",
+            },
+            zstyle,
+          ]}
+        >
+          {letter.toUpperCase()}
+        </Animated.Text>
+      </Animated.View>
+    </GestureDetector>
   );
 };
 
 export function ScrollAnimationLesson() {
   const y = useSharedValue(0);
   const isInteracting = useSharedValue(false);
+  const scrollViewRef = useRef<SectionList>(null);
   const knobScale = useDerivedValue(() => {
     return withSpring(isInteracting.value ? 1 : 0);
   });
+
+  const alphabetRef = useAnimatedRef<View>();
+
+  // float value (used for animation)
+  const scrollableIndex = useSharedValue(0);
+  // rounded value (used to snap to position)
+  const activeScrollIndex = useSharedValue(0);
 
   const getItemLayout = useMemo(() => {
     return sectionListGetItemLayout({
@@ -62,6 +120,32 @@ export function ScrollAnimationLesson() {
     });
   }, []);
 
+  const snapIndicatorTo = (index: number) => {
+    runOnUI(() => {
+      if (scrollableIndex.value === index || isInteracting.value) {
+        return;
+      }
+
+      const alphabetLayout = measure(alphabetRef);
+      if (!alphabetLayout) {
+        return;
+      }
+      const snapBy =
+        (alphabetLayout.height - layout.knobSize) / (alphabet.length - 1);
+      const snapTo = index * snapBy;
+      y.value = withSpring(snapTo, { damping: 15 });
+      scrollableIndex.value = withTiming(index);
+    })();
+  };
+
+  const scrollToLocation = (index: number) => {
+    scrollViewRef.current?.scrollToLocation({
+      itemIndex: 0,
+      sectionIndex: index,
+      animated: false,
+    });
+  };
+
   const panGesture = Gesture.Pan()
     .averageTouches(true)
     .onBegin(() => {
@@ -69,10 +153,37 @@ export function ScrollAnimationLesson() {
     })
     .onChange((ev) => {
       // take into account the knob size
-      y.value += ev.changeY;
+      const alphabetLayout = measure(alphabetRef);
+      if (!alphabetLayout) {
+        return;
+      }
+      y.value = clamp(
+        (y.value += ev.changeY),
+        alphabetLayout.y, // take into account the knob size
+        alphabetLayout.height - layout.knobSize
+      );
+
+      // This is snapTo by the same interval. This will snap to the nearest
+      // letter based on the knob position.
+      const snapBy =
+        (alphabetLayout.height - layout.knobSize) / (alphabet.length - 1);
+
+      scrollableIndex.value = y.value / snapBy;
+      const snapToIndex = Math.round(scrollableIndex.value);
+
+      // Ensure that we don't trigger scroll to the same index.
+      if (snapToIndex === activeScrollIndex.value) {
+        return;
+      }
+
+      // This is to avoid triggering scrolling to the same index.
+      activeScrollIndex.value = snapToIndex;
+
+      runOnJS(scrollToLocation)(snapToIndex);
     })
     .onEnd(() => {
-      y.value = withSpring(0);
+      // y.value = withSpring(0);
+      runOnJS(snapIndicatorTo)(activeScrollIndex.value);
     })
     .onFinalize(() => {
       isInteracting.value = false;
@@ -101,6 +212,7 @@ export function ScrollAnimationLesson() {
     <Container centered={false}>
       <View style={{ flex: 1 }}>
         <SectionList
+          ref={scrollViewRef}
           contentContainerStyle={{ paddingHorizontal: layout.spacing * 2 }}
           stickySectionHeadersEnabled={false}
           // @ts-ignore
@@ -112,6 +224,15 @@ export function ScrollAnimationLesson() {
           renderItem={({ item }) => {
             return <ContactsListItem item={item} />;
           }}
+          onViewableItemsChanged={({ viewableItems }) => {
+            const half = Math.floor(viewableItems.length / 2);
+            const section = viewableItems[half]?.section;
+            if (!section) {
+              return;
+            }
+            const { index } = section as ContactSection;
+            snapIndicatorTo(index);
+          }}
         />
         <View
           style={{
@@ -119,7 +240,8 @@ export function ScrollAnimationLesson() {
             right: 0,
             top: layout.indicatorSize,
             bottom: layout.indicatorSize,
-          }}>
+          }}
+        >
           <GestureDetector gesture={panGesture}>
             <Animated.View
               style={[styles.knob, animatedStyle]}
@@ -127,16 +249,24 @@ export function ScrollAnimationLesson() {
             />
           </GestureDetector>
           <View
+            ref={alphabetRef}
             style={{
               transform: [{ translateX: -layout.indicatorSize / 4 }],
               flex: 1,
               width: 20,
               justifyContent: "space-around",
             }}
-            pointerEvents='box-none'>
+            pointerEvents="box-none"
+          >
             {[...Array(alphabet.length).keys()].map((i) => {
               return (
-                <AlphabetLetter key={i} letter={alphabet.charAt(i)} index={i} />
+                <AlphabetLetter
+                  key={i}
+                  letter={alphabet.charAt(i)}
+                  index={i}
+                  scrollableIndex={scrollableIndex}
+                  scrollToLocation={scrollToLocation}
+                />
               );
             })}
           </View>
